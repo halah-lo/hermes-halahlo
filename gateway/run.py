@@ -5632,6 +5632,15 @@ class TurnRunner:
             _output_toks = getattr(_agent, "session_completion_tokens", 0)
             _context_length = getattr(_agent.context_compressor, "context_length", 0) or 0
         _resolved_model = getattr(_agent, "model", None) if _agent else None
+        _total_toks = getattr(_agent, "session_total_tokens", 0) if _agent else 0
+
+        logger.info(
+            "[AI USAGE] Model=%s | Input=%s | Output=%s | Total=%s",
+            _resolved_model or "unknown",
+            f"{_input_toks:,}",
+            f"{_output_toks:,}",
+            f"{_total_toks:,}",
+        )
 
         # Sync session_id immediately after run_conversation(). Compression
         # can rotate before a follow-up model call fails; the failure return
@@ -20083,19 +20092,48 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             platform_key = _platform_config_key(source.platform)
 
-            from hermes_cli.tools_config import _get_platform_tools
-            enabled_toolsets = sorted(_get_platform_tools(user_config, platform_key))
-            agent_cfg = user_config.get("agent") or {}
-            disabled_toolsets = agent_cfg.get("disabled_toolsets") or None
+           #from hermes_cli.tools_config import _get_platform_tools
+           # enabled_toolsets = sorted(_get_platform_tools(user_config, platform_key))
+           # agent_cfg = user_config.get("agent") or {}
+           # disabled_toolsets = agent_cfg.get("disabled_toolsets") or None
 
-            pr = self._provider_routing
-            max_iterations = _current_max_iterations()
-            reasoning_config = self._resolve_session_reasoning_config(
-                source=source, model=model
+           # pr = self._provider_routing
+           # max_iterations = _current_max_iterations()
+           # reasoning_config = self._resolve_session_reasoning_config(
+           #    source=source, model=model
+           # )
+           # self._reasoning_config = reasoning_config
+           # self._service_tier = self._resolve_session_service_tier(source=source)
+           # turn_route = self._resolve_turn_agent_config(prompt, model, runtime_kwargs)
+            from hermes_cli.tools_config import _get_platform_tools
+
+            enabled_toolsets = sorted(
+                _get_platform_tools(user_config, platform_key)
             )
-            self._reasoning_config = reasoning_config
-            self._service_tier = self._resolve_session_service_tier(source=source)
-            turn_route = self._resolve_turn_agent_config(prompt, model, runtime_kwargs)
+
+            # Per-user Discord admin toolset restriction.
+            # DISCORD_ALLOWED_USERS controls bot access.
+            # DISCORD_ADMIN_USERS controls access to discord_admin tools.
+            if platform_key == "discord" and "discord_admin" in enabled_toolsets:
+                admin_users = {
+                    uid.strip()
+                    for uid in os.getenv("DISCORD_ADMIN_USERS", "").split(",")
+                    if uid.strip()
+                }
+
+                current_user_id = str(
+                    getattr(source, "user_id", "") or ""
+                ).strip()
+
+                if current_user_id not in admin_users:
+                    enabled_toolsets.remove("discord_admin")
+                    logger.debug(
+                        "Discord admin toolset withheld from user %s",
+                        current_user_id or "unknown",
+                    )
+
+            agent_cfg_local = user_config.get("agent") or {}
+            disabled_toolsets = agent_cfg_local.get("disabled_toolsets") or None
 
             # Enrich the prompt with image descriptions so the background
             # agent can see user-attached images (same as the main flow).
@@ -25099,6 +25137,27 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         from hermes_cli.tools_config import _get_platform_tools
         enabled_toolsets = sorted(_get_platform_tools(user_config, platform_key))
+
+        # Discord role-based tool access
+        if platform_key == "discord":
+            admin_users = {
+                uid.strip()
+                for uid in os.getenv("DISCORD_ADMIN_USERS", "").split(",")
+                if uid.strip()
+            }
+            current_user_id = str(getattr(source, "user_id", "") or "").strip()
+
+            if current_user_id not in admin_users:
+                member_allowed_toolsets = {"memory", "skills", "vision", "web"}
+                enabled_toolsets = [
+                    ts for ts in enabled_toolsets
+                    if ts in member_allowed_toolsets
+                ]
+                logger.info(
+                    "Discord member tool restriction: user=%s toolsets=%s",
+                    current_user_id or "unknown",
+                    enabled_toolsets,
+                )
         agent_cfg_local = user_config.get("agent") or {}
         disabled_toolsets = agent_cfg_local.get("disabled_toolsets") or None
 
